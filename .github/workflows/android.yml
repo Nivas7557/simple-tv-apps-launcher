@@ -31,8 +31,8 @@ jobs:
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
-          mkdir -p $RUNNER_TEMP/keystore
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > $RUNNER_TEMP/keystore/release.jks
+          mkdir -p "$RUNNER_TEMP/keystore"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/keystore/release.jks"
 
       - name: Build release APK
         env:
@@ -46,7 +46,7 @@ jobs:
             -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
             -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
             -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
-            
+
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
         with:
