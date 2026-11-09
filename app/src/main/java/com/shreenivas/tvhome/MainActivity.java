@@ -2,6 +2,7 @@ package com.shreenivas.tvhome;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.Dialog;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -17,8 +18,8 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
-import android.view.WindowManager;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.Button;
 import android.widget.EditText;
@@ -40,9 +41,6 @@ import java.util.Locale;
 import java.util.Map;
 
 public class MainActivity extends Activity {
-    private static final int BACKGROUND = Color.rgb(13, 16, 23);
-    private static final int SURFACE = Color.rgb(29, 34, 45);
-    private static final int SURFACE_HIGHLIGHT = Color.rgb(47, 56, 73);
     private static final int WALLPAPER_REQUEST = 41;
     private static final String PREFS = "launcher_preferences";
     private static final String PREF_ACCENT = "accent_color";
@@ -50,8 +48,11 @@ public class MainActivity extends Activity {
     private static final String PREF_BADGE = "icon_badge";
     private static final String PREF_COLUMNS = "grid_columns";
     private static final String PREF_WALLPAPER = "wallpaper_uri";
+    private static final String PREF_WALLPAPER_X = "wallpaper_offset_x";
+    private static final String PREF_WALLPAPER_Y = "wallpaper_offset_y";
     private static final String PREF_FAVORITES = "favorites";
     private static final String PREF_USER_NAME = "launcher_user_name";
+    private static final String PREF_THEME = "launcher_theme";
 
     private FrameLayout root;
     private LinearLayout appGrid;
@@ -77,16 +78,41 @@ public class MainActivity extends Activity {
         if (drawerOpen) closeDrawer(); else super.onBackPressed();
     }
 
-    private SharedPreferences prefs() {
-        return getSharedPreferences(PREFS, MODE_PRIVATE);
+    private SharedPreferences prefs() { return getSharedPreferences(PREFS, MODE_PRIVATE); }
+    private int accent() { return prefs().getInt(PREF_ACCENT, Color.rgb(83, 139, 255)); }
+    private String userName() { return prefs().getString(PREF_USER_NAME, "Shree"); }
+    private String theme() { return prefs().getString(PREF_THEME, "default"); }
+
+    private int pageBackground() {
+        switch (theme()) {
+            case "neon": return Color.rgb(8, 8, 18);
+            case "ocean": return Color.rgb(8, 20, 32);
+            case "sunset": return Color.rgb(29, 17, 25);
+            case "forest": return Color.rgb(12, 25, 20);
+            case "glossy": return Color.rgb(12, 16, 25);
+            default: return Color.rgb(13, 16, 23);
+        }
     }
 
-    private int accent() {
-        return prefs().getInt(PREF_ACCENT, Color.rgb(83, 139, 255));
+    private int surfaceColor() {
+        switch (theme()) {
+            case "neon": return Color.rgb(27, 21, 47);
+            case "ocean": return Color.rgb(20, 42, 59);
+            case "sunset": return Color.rgb(57, 34, 43);
+            case "forest": return Color.rgb(27, 48, 39);
+            case "glossy": return Color.rgb(35, 44, 61);
+            default: return Color.rgb(29, 34, 45);
+        }
     }
 
-    private String userName() {
-        return prefs().getString(PREF_USER_NAME, "Shree");
+    private int focusSurfaceColor() {
+        switch (theme()) {
+            case "neon": return Color.rgb(76, 43, 112);
+            case "ocean": return Color.rgb(32, 82, 105);
+            case "sunset": return Color.rgb(112, 59, 66);
+            case "forest": return Color.rgb(47, 91, 67);
+            default: return Color.rgb(47, 56, 73);
+        }
     }
 
     private void buildScreen() {
@@ -95,15 +121,17 @@ public class MainActivity extends Activity {
         if (wallpaper != null) {
             ImageView image = new ImageView(this);
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            try {
-                image.setImageURI(Uri.parse(wallpaper));
-            } catch (RuntimeException ignored) { }
+            try { image.setImageURI(Uri.parse(wallpaper)); } catch (RuntimeException ignored) { }
             root.addView(image, new FrameLayout.LayoutParams(-1, -1));
+            image.post(() -> {
+                image.setTranslationX(prefs().getFloat(PREF_WALLPAPER_X, 0f) * image.getWidth());
+                image.setTranslationY(prefs().getFloat(PREF_WALLPAPER_Y, 0f) * image.getHeight());
+            });
             View shade = new View(this);
             shade.setBackgroundColor(0xB80D1017);
             root.addView(shade, new FrameLayout.LayoutParams(-1, -1));
         } else {
-            root.setBackgroundColor(BACKGROUND);
+            root.setBackgroundColor(pageBackground());
         }
 
         LinearLayout page = new LinearLayout(this);
@@ -116,24 +144,20 @@ public class MainActivity extends Activity {
         TextView brand = text(userName(), 16, accent(), true);
         brand.setLetterSpacing(.15f);
         top.addView(brand);
-
         Button apps = pill("Apps", true);
         LinearLayout.LayoutParams appsParams = new LinearLayout.LayoutParams(-2, dp(46));
         appsParams.leftMargin = dp(30);
         top.addView(apps, appsParams);
         apps.setFocusable(false);
-
         View gap = new View(this);
         top.addView(gap, new LinearLayout.LayoutParams(0, 1, 1));
         top.addView(text(new SimpleDateFormat("EEE, h:mm a", Locale.getDefault()).format(new Date()),
                 15, Color.WHITE, false));
-
         Button customize = pill("✦  Customize", false);
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(46));
         cp.leftMargin = dp(14);
         top.addView(customize, cp);
         customize.setOnClickListener(v -> openDrawer(true));
-
         Button quick = pill("⚙  Quick settings", false);
         LinearLayout.LayoutParams qp = new LinearLayout.LayoutParams(-2, dp(46));
         qp.leftMargin = dp(9);
@@ -154,10 +178,7 @@ public class MainActivity extends Activity {
             LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, dp(42));
             tp.rightMargin = dp(8);
             categoryBar.addView(tab, tp);
-            tab.setOnClickListener(v -> {
-                selectedCategory = category;
-                populateApps();
-            });
+            tab.setOnClickListener(v -> { selectedCategory = category; populateApps(); });
         }
         LinearLayout.LayoutParams cbp = new LinearLayout.LayoutParams(-1, -2);
         cbp.topMargin = dp(14);
@@ -182,12 +203,11 @@ public class MainActivity extends Activity {
         drawerScrim.setVisibility(View.GONE);
         drawerScrim.setOnClickListener(v -> closeDrawer());
         root.addView(drawerScrim, new FrameLayout.LayoutParams(-1, -1));
-
         settingsDrawer = new LinearLayout(this);
         settingsDrawer.setOrientation(LinearLayout.VERTICAL);
         settingsDrawer.setBackground(roundRect(Color.rgb(25, 30, 40), dp(26)));
         settingsDrawer.setTranslationX(dp(430));
-        root.addView(settingsDrawer, new FrameLayout.LayoutParams(dp(410), -1, Gravity.END));
+        root.addView(settingsDrawer, new FrameLayout.LayoutParams(dp(430), -1, Gravity.END));
         setContentView(root);
         populateApps();
     }
@@ -201,8 +221,7 @@ public class MainActivity extends Activity {
         addApps(pm, Intent.CATEGORY_LEANBACK_LAUNCHER, unique);
         addApps(pm, Intent.CATEGORY_LAUNCHER, unique);
         List<ResolveInfo> all = new ArrayList<>(unique.values());
-        Collections.sort(all, Comparator.comparing(
-                x -> x.loadLabel(pm).toString().toLowerCase(Locale.ROOT)));
+        Collections.sort(all, Comparator.comparing(x -> x.loadLabel(pm).toString().toLowerCase(Locale.ROOT)));
         List<String> favorites = new ArrayList<>(prefs().getStringSet(PREF_FAVORITES,
                 Collections.<String>emptySet()));
         List<ResolveInfo> favoriteApps = new ArrayList<>();
@@ -218,15 +237,13 @@ public class MainActivity extends Activity {
             lp.bottomMargin = dp(8);
             favoritesRow.addView(label, lp);
             for (ResolveInfo app : favoriteApps) {
-                favoritesRow.addView(makeTile(app, pm, true),
-                        new LinearLayout.LayoutParams(dp(142), dp(132)));
+                favoritesRow.addView(makeTile(app, pm, true), new LinearLayout.LayoutParams(dp(142), dp(132)));
             }
         }
         int columns = Math.max(3, Math.min(8, prefs().getInt(PREF_COLUMNS, 5)));
         if (filtered.isEmpty()) {
-            TextView empty = text("No apps in this category yet. Long-press an app tile to add it to Favorites.",
-                    17, Color.LTGRAY, false);
-            appGrid.addView(empty);
+            appGrid.addView(text("No apps in this category yet. Long-press an app tile to add it to Favorites.",
+                    17, Color.LTGRAY, false));
             return;
         }
         for (int start = 0; start < filtered.size(); start += columns) {
@@ -266,11 +283,9 @@ public class MainActivity extends Activity {
         tile.setOrientation(LinearLayout.VERTICAL);
         tile.setGravity(Gravity.CENTER);
         tile.setPadding(dp(8), dp(8), dp(8), dp(8));
-        tile.setBackground(roundRect(SURFACE, dp(20)));
+        tile.setBackground(appTileBackground(false));
         tile.setFocusable(true);
-        tile.setOnFocusChangeListener((v, focused) -> v.setBackground(roundRect(
-                focused ? SURFACE_HIGHLIGHT : SURFACE, dp(20))));
-
+        tile.setOnFocusChangeListener((v, focused) -> v.setBackground(appTileBackground(focused)));
         FrameLayout iconFrame = new FrameLayout(this);
         int size = dp(compact ? 48 : 56);
         ImageView icon = new ImageView(this);
@@ -305,11 +320,19 @@ public class MainActivity extends Activity {
         np.topMargin = dp(8);
         tile.addView(name, np);
         tile.setOnClickListener(v -> launchApp(info));
-        tile.setOnLongClickListener(v -> {
-            toggleFavorite(info.activityInfo.packageName);
-            return true;
-        });
+        tile.setOnLongClickListener(v -> { toggleFavorite(info.activityInfo.packageName); return true; });
         return tile;
+    }
+
+    private GradientDrawable appTileBackground(boolean focused) {
+        int top = focused ? focusSurfaceColor() : surfaceColor();
+        int bottom = theme().equals("glossy")
+                ? (focused ? Color.rgb(63, 77, 103) : Color.rgb(21, 27, 39)) : top;
+        GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{top, bottom});
+        d.setCornerRadius(dp(20));
+        d.setStroke(dp(focused ? 2 : 1), focused ? accent() : Color.rgb(55, 64, 81));
+        return d;
     }
 
     private void toggleFavorite(String packageName) {
@@ -337,44 +360,185 @@ public class MainActivity extends Activity {
         settingsDrawer.removeAllViews();
         settingsDrawer.setPadding(dp(24), dp(26), dp(24), dp(22));
         ScrollView panelScroll = new ScrollView(this);
-        LinearLayout panelContent = new LinearLayout(this);
-        panelContent.setOrientation(LinearLayout.VERTICAL);
+        panelScroll.setClipToPadding(false);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
         settingsDrawer.addView(panelScroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        panelScroll.addView(panelContent);
-        if (customize) buildCustomizePanel(panelContent);
-        else buildQuickPanel(panelContent);
+        panelScroll.addView(panel);
+        if (customize) buildCustomizePanel(panel); else buildQuickPanel(panel);
+        Button close = pill("Close", false);
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(-1, dp(44));
+        closeParams.topMargin = dp(8);
+        settingsDrawer.addView(close, closeParams);
+        close.setOnClickListener(v -> closeDrawer());
         settingsDrawer.animate().translationX(0).setDuration(220)
                 .setInterpolator(new DecelerateInterpolator()).start();
     }
 
     private void buildCustomizePanel(LinearLayout panel) {
-        panel.addView(text("Personalize", 25, Color.WHITE, true));
-        Button name = pill("User name: " + userName(), false);
+        panel.addView(text("Customize Home Launcher", 24, Color.WHITE, true));
+        addLabel(panel, "User name");
+        Button name = pill("✎  " + userName(), false);
         addDrawerButton(panel, name);
         name.setOnClickListener(v -> showUserNameDialog());
 
-        addLabel(panel, "Accent color");
-        addColor(panel, "Royal Blue", Color.rgb(83, 139, 255));
-        addColor(panel, "Magenta", Color.rgb(232, 72, 174));
-        addColor(panel, "Purple", Color.rgb(165, 105, 255));
-        addColor(panel, "Emerald", Color.rgb(46, 190, 132));
-        addColor(panel, "Sunset Orange", Color.rgb(255, 145, 75));
-        addLabel(panel, "Icon shape");
-        addStringChoice(panel, "Original", PREF_ICON_SHAPE, "original");
-        addStringChoice(panel, "Circle", PREF_ICON_SHAPE, "circle");
-        addStringChoice(panel, "Rounded square", PREF_ICON_SHAPE, "rounded");
-        addLabel(panel, "Icon badge");
-        addStringChoice(panel, "None", PREF_BADGE, "");
-        addStringChoice(panel, "Purple heart 💜", PREF_BADGE, "💜");
-        addStringChoice(panel, "Blue heart 💙", PREF_BADGE, "💙");
-        addStringChoice(panel, "Star ⭐", PREF_BADGE, "⭐");
-        addLabel(panel, "Apps per row");
-        for (int count : new int[]{4, 5, 6, 7, 8}) {
-            addStringChoice(panel, count + " columns", PREF_COLUMNS, String.valueOf(count));
-        }
-        Button wallpaper = pill("Choose wallpaper", false);
+        addLabel(panel, "Accent");
+        addChoiceGrid(panel, new String[]{"Royal Blue", "Magenta", "Purple", "Emerald", "Sunset Orange"},
+                new String[]{"royal", "magenta", "purple", "emerald", "sunset"}, "accent");
+
+        addLabel(panel, "Icon Shape");
+        addChoiceGrid(panel, new String[]{"Original", "Circle", "Rounded Square"},
+                new String[]{"original", "circle", "rounded"}, "shape");
+
+        addLabel(panel, "Apps Per Row");
+        addChoiceGrid(panel, new String[]{"4 columns", "5 columns", "6 columns", "7 columns", "8 columns"},
+                new String[]{"4", "5", "6", "7", "8"}, "columns");
+
+        addLabel(panel, "Icon Badge");
+        addChoiceGrid(panel, new String[]{"None", "Purple Heart", "Blue Heart", "Star"},
+                new String[]{"", "💜", "💙", "⭐"}, "badge");
+
+        addLabel(panel, "Themes");
+        addChoiceGrid(panel, new String[]{"Default", "Neon", "Ocean", "Sunset", "Forest", "Glossy"},
+                new String[]{"default", "neon", "ocean", "sunset", "forest", "glossy"}, "theme");
+
+        addLabel(panel, "Wallpaper");
+        Button wallpaper = pill("Choose wallpaper…", false);
         addDrawerButton(panel, wallpaper);
         wallpaper.setOnClickListener(v -> chooseWallpaper());
+    }
+
+    private void addChoiceGrid(LinearLayout panel, String[] labels, String[] values, String type) {
+        int selectedColor = prefs().getInt(PREF_ACCENT, Color.rgb(83, 139, 255));
+        for (int start = 0; start < labels.length; start += 2) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, -2);
+            rowParams.bottomMargin = dp(7);
+            panel.addView(row, rowParams);
+            for (int index = start; index < Math.min(start + 2, labels.length); index++) {
+                final int choiceIndex = index;
+                String value = values[index];
+                boolean selected = isChoiceSelected(type, value);
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setGravity(Gravity.CENTER);
+                card.setPadding(dp(7), dp(7), dp(7), dp(7));
+                card.setFocusable(true);
+                card.setBackground(roundRect(selected ? selectedColor : surfaceColor(), dp(14)));
+                LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(0, dp(88), 1);
+                cardParams.setMargins(dp(4), dp(3), dp(4), dp(3));
+                row.addView(card, cardParams);
+
+                View swatch = makeChoicePreview(type, value, selectedColor);
+                LinearLayout.LayoutParams swatchParams = new LinearLayout.LayoutParams(-1, dp(43));
+                swatchParams.bottomMargin = dp(5);
+                card.addView(swatch, swatchParams);
+                TextView caption = text(labels[index], 12, Color.WHITE, selected);
+                caption.setGravity(Gravity.CENTER);
+                card.addView(caption, new LinearLayout.LayoutParams(-1, -2));
+                card.setOnFocusChangeListener((v, focused) -> {
+                    if (focused) v.setBackground(roundRect(focusSurfaceColor(), dp(14)));
+                    else v.setBackground(roundRect(isChoiceSelected(type, value)
+                            ? accent() : surfaceColor(), dp(14)));
+                });
+                card.setOnClickListener(v -> {
+                    applyChoice(type, value);
+                    refreshAndReopenCustomize();
+                });
+            }
+        }
+    }
+
+    private View makeChoicePreview(String type, String value, int selectedColor) {
+        FrameLayout preview = new FrameLayout(this);
+        int color;
+        if ("accent".equals(type)) {
+            color = accentColor(value);
+        } else if ("theme".equals(type)) {
+            color = themePreviewColor(value);
+        } else {
+            color = selectedColor;
+        }
+        View sample = new View(this);
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(color);
+        if ("shape".equals(type) && "circle".equals(value)) {
+            shape.setShape(GradientDrawable.OVAL);
+            sample.setBackground(shape);
+            FrameLayout.LayoutParams sampleParams = new FrameLayout.LayoutParams(dp(34), dp(34), Gravity.CENTER);
+            preview.addView(sample, sampleParams);
+        } else {
+            shape.setCornerRadius("shape".equals(type) && "original".equals(value) ? dp(4) : dp(11));
+            if ("theme".equals(type) && "glossy".equals(value)) {
+                GradientDrawable glossy = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                        new int[]{Color.rgb(125, 165, 230), Color.rgb(34, 48, 76)});
+                glossy.setCornerRadius(dp(11));
+                sample.setBackground(glossy);
+            } else {
+                sample.setBackground(shape);
+            }
+            FrameLayout.LayoutParams sampleParams = new FrameLayout.LayoutParams(-1, dp(34), Gravity.CENTER);
+            sampleParams.leftMargin = dp(12);
+            sampleParams.rightMargin = dp(12);
+            preview.addView(sample, sampleParams);
+        }
+        if ("columns".equals(type)) {
+            TextView number = text(value, 20, Color.WHITE, true);
+            number.setGravity(Gravity.CENTER);
+            preview.addView(number, new FrameLayout.LayoutParams(-1, -1));
+        }
+        return preview;
+    }
+
+    private boolean isChoiceSelected(String type, String value) {
+        switch (type) {
+            case "accent": return prefs().getInt(PREF_ACCENT, Color.rgb(83, 139, 255)) == accentColor(value);
+            case "shape": return prefs().getString(PREF_ICON_SHAPE, "original").equals(value);
+            case "columns": return prefs().getInt(PREF_COLUMNS, 5) == Integer.parseInt(value);
+            case "badge": return prefs().getString(PREF_BADGE, "").equals(value);
+            case "theme": return theme().equals(value);
+            default: return false;
+        }
+    }
+
+    private void applyChoice(String type, String value) {
+        SharedPreferences.Editor editor = prefs().edit();
+        switch (type) {
+            case "accent": editor.putInt(PREF_ACCENT, accentColor(value)); break;
+            case "shape": editor.putString(PREF_ICON_SHAPE, value); break;
+            case "columns": editor.putInt(PREF_COLUMNS, Integer.parseInt(value)); break;
+            case "badge": editor.putString(PREF_BADGE, value); break;
+            case "theme": editor.putString(PREF_THEME, value); break;
+        }
+        editor.apply();
+    }
+
+    private int accentColor(String name) {
+        switch (name) {
+            case "magenta": return Color.rgb(232, 72, 174);
+            case "purple": return Color.rgb(165, 105, 255);
+            case "emerald": return Color.rgb(46, 190, 132);
+            case "sunset": return Color.rgb(255, 145, 75);
+            default: return Color.rgb(83, 139, 255);
+        }
+    }
+
+    private int themePreviewColor(String name) {
+        switch (name) {
+            case "neon": return Color.rgb(113, 48, 191);
+            case "ocean": return Color.rgb(22, 111, 153);
+            case "sunset": return Color.rgb(194, 80, 75);
+            case "forest": return Color.rgb(46, 126, 78);
+            case "glossy": return Color.rgb(83, 139, 255);
+            default: return Color.rgb(72, 80, 96);
+        }
+    }
+
+    private void refreshAndReopenCustomize() {
+        drawerOpen = false;
+        buildScreen();
+        openDrawer(true);
     }
 
     private void showUserNameDialog() {
@@ -391,9 +555,8 @@ public class MainActivity extends Activity {
                     String value = input.getText().toString().trim();
                     if (value.isEmpty()) value = "Shree";
                     prefs().edit().putString(PREF_USER_NAME, value).apply();
-                    refresh();
-                })
-                .show();
+                    refreshAndReopenCustomize();
+                }).show();
     }
 
     private void buildQuickPanel(LinearLayout panel) {
@@ -406,7 +569,7 @@ public class MainActivity extends Activity {
                 "Display settings", () -> launchSettings(Settings.ACTION_DISPLAY_SETTINGS));
         addQuickPair(panel, "Sound settings", () -> launchSettings(Settings.ACTION_SOUND_SETTINGS),
                 "All settings", () -> launchSettings(Settings.ACTION_SETTINGS));
-        TextView note = text("The Wi-Fi tile opens Android's system Internet panel, where you can toggle Wi-Fi and view available networks.",
+        TextView note = text("Wi-Fi opens Android's system Internet panel for the toggle and available networks.",
                 12, Color.rgb(166, 175, 191), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
         noteParams.topMargin = dp(12);
@@ -435,55 +598,33 @@ public class MainActivity extends Activity {
     }
 
     private void openInternetPanel() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                startActivity(new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY));
+                return;
+            } catch (ActivityNotFoundException | SecurityException ignored) { }
+        }
+        launchSettings(Settings.ACTION_WIFI_SETTINGS);
+    }
+
+    private void launchSettings(String action) {
         try {
-            startActivity(new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY));
-            return;
-        } catch (ActivityNotFoundException | SecurityException ignored) {
-            // Fall back to Wi-Fi settings below.
+            startActivity(new Intent(action));
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Toast.makeText(this, "Not available on this device", Toast.LENGTH_SHORT).show();
         }
     }
-    launchSettings(Settings.ACTION_WIFI_SETTINGS);
-}
 
-private void launchSettings(String action) {
-    try {
-        startActivity(new Intent(action));
-    } catch (ActivityNotFoundException | SecurityException e) {
-        Toast.makeText(this, "Not available on this device", Toast.LENGTH_SHORT).show();
-    }
-}
-
-private void addLabel(LinearLayout panel, String label) {
-    TextView t = text(label.toUpperCase(Locale.ROOT), 11, accent(), true);
-    LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-    p.topMargin = dp(10);
-    p.bottomMargin = dp(4);
-    panel.addView(t, p);
-}
-
-    private void addColor(LinearLayout panel, String label, int color) {
-        Button b = pill("●   " + label, false);
-        b.setTextColor(color);
-        addDrawerButton(panel, b);
-        b.setOnClickListener(v -> {
-            prefs().edit().putInt(PREF_ACCENT, color).apply();
-            refresh();
-        });
-    }
-
-    private void addStringChoice(LinearLayout panel, String label, String key, String value) {
-        Button b = pill(label, false);
-        addDrawerButton(panel, b);
-        b.setOnClickListener(v -> {
-            if (PREF_COLUMNS.equals(key)) prefs().edit().putInt(key, Integer.parseInt(value)).apply();
-            else prefs().edit().putString(key, value).apply();
-            refresh();
-        });
+    private void addLabel(LinearLayout panel, String label) {
+        TextView t = text(label.toUpperCase(Locale.ROOT), 12, accent(), true);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+        p.topMargin = dp(12);
+        p.bottomMargin = dp(5);
+        panel.addView(t, p);
     }
 
     private void addDrawerButton(LinearLayout panel, Button button) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(40));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(42));
         p.bottomMargin = dp(4);
         panel.addView(button, p);
     }
@@ -507,14 +648,81 @@ private void addLabel(LinearLayout panel, String label) {
             try {
                 getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
             } catch (SecurityException ignored) { }
-            prefs().edit().putString(PREF_WALLPAPER, uri.toString()).apply();
-            refresh();
+            showWallpaperPreview(uri);
         }
     }
 
-    private void refresh() {
-        drawerOpen = false;
-        buildScreen();
+    private void showWallpaperPreview(Uri uri) {
+        Dialog dialog = new Dialog(this);
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(18), dp(14), dp(18), dp(14));
+        layout.setBackground(roundRect(Color.rgb(22, 27, 38), dp(20)));
+        TextView title = text("Wallpaper preview — drag to position", 19, Color.WHITE, true);
+        layout.addView(title, new LinearLayout.LayoutParams(-1, dp(38)));
+
+        FrameLayout viewport = new FrameLayout(this);
+        viewport.setClipToOutline(true);
+        viewport.setBackground(roundRect(Color.BLACK, dp(14)));
+        LinearLayout.LayoutParams viewportParams = new LinearLayout.LayoutParams(-1, 0, 1);
+        viewportParams.topMargin = dp(8);
+        viewportParams.bottomMargin = dp(12);
+        layout.addView(viewport, viewportParams);
+
+        ImageView preview = new ImageView(this);
+        preview.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        preview.setImageURI(uri);
+        viewport.addView(preview, new FrameLayout.LayoutParams(-1, -1));
+        final float[] lastTouch = new float[2];
+        preview.setOnTouchListener((view, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                lastTouch[0] = event.getRawX();
+                lastTouch[1] = event.getRawY();
+                return true;
+            }
+            if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                float dx = event.getRawX() - lastTouch[0];
+                float dy = event.getRawY() - lastTouch[1];
+                preview.setTranslationX(preview.getTranslationX() + dx);
+                preview.setTranslationY(preview.getTranslationY() + dy);
+                lastTouch[0] = event.getRawX();
+                lastTouch[1] = event.getRawY();
+                return true;
+            }
+            return event.getAction() == MotionEvent.ACTION_UP;
+        });
+
+        LinearLayout buttons = new LinearLayout(this);
+        buttons.setOrientation(LinearLayout.HORIZONTAL);
+        Button cancel = pill("Cancel", false);
+        Button apply = pill("Apply wallpaper", true);
+        LinearLayout.LayoutParams buttonParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+        buttonParams.rightMargin = dp(6);
+        buttons.addView(cancel, buttonParams);
+        LinearLayout.LayoutParams applyParams = new LinearLayout.LayoutParams(0, dp(48), 1);
+        applyParams.leftMargin = dp(6);
+        buttons.addView(apply, applyParams);
+        layout.addView(buttons, new LinearLayout.LayoutParams(-1, dp(48)));
+        dialog.setContentView(layout);
+        cancel.setOnClickListener(v -> dialog.dismiss());
+        apply.setOnClickListener(v -> {
+            float width = Math.max(1, viewport.getWidth());
+            float height = Math.max(1, viewport.getHeight());
+            prefs().edit()
+                    .putString(PREF_WALLPAPER, uri.toString())
+                    .putFloat(PREF_WALLPAPER_X, preview.getTranslationX() / width)
+                    .putFloat(PREF_WALLPAPER_Y, preview.getTranslationY() / height)
+                    .apply();
+            dialog.dismiss();
+            drawerOpen = false;
+            buildScreen();
+        });
+        dialog.show();
+        if (dialog.getWindow() != null) {
+            int width = Math.min(dp(820), getResources().getDisplayMetrics().widthPixels - dp(48));
+            int height = Math.min(dp(600), getResources().getDisplayMetrics().heightPixels - dp(48));
+            dialog.getWindow().setLayout(Math.max(dp(420), width), Math.max(dp(360), height));
+        }
     }
 
     private void closeDrawer() {
@@ -543,10 +751,10 @@ private void addLabel(LinearLayout panel, String label) {
         b.setTextSize(14);
         b.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         b.setTextColor(selected ? Color.rgb(16, 22, 33) : Color.WHITE);
-        b.setBackground(roundRect(selected ? accent() : SURFACE, dp(22)));
+        b.setBackground(roundRect(selected ? accent() : surfaceColor(), dp(22)));
         b.setFocusable(true);
         b.setOnFocusChangeListener((v, focused) -> {
-            if (!selected) v.setBackground(roundRect(focused ? SURFACE_HIGHLIGHT : SURFACE, dp(22)));
+            if (!selected) v.setBackground(roundRect(focused ? focusSurfaceColor() : surfaceColor(), dp(22)));
         });
         return b;
     }
