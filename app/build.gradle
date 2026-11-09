@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'com.example.simpletvlauncher'
+    namespace 'com.shreenivas.tvhome'
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.example.simpletvlauncher'
+        applicationId 'com.shreenivas.tvhome'
         minSdk 23
         targetSdk 28
         versionCode 1
