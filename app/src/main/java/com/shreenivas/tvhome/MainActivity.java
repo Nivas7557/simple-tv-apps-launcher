@@ -89,7 +89,7 @@ public class MainActivity extends Activity {
             shade.setBackgroundColor(0xB80D1017);
             root.addView(shade, new FrameLayout.LayoutParams(-1, -1));
         } else {
-            root.setBackgroundColor(Color.rgb(13, 16, 23));
+            root.setBackgroundColor(Color.rgb(9, 16, 25));
         }
 
         LinearLayout page = new LinearLayout(this);
@@ -99,6 +99,8 @@ public class MainActivity extends Activity {
 
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setBackground(roundRect(Color.argb(80, 9, 18, 33), dp(26)));
+        top.setPadding(dp(18), dp(12), dp(18), dp(12));
         TextView brand = text(userName(), 16, accent(), true);
         brand.setLetterSpacing(.15f);
         top.addView(brand);
@@ -149,6 +151,7 @@ public class MainActivity extends Activity {
         content.setOrientation(LinearLayout.VERTICAL);
         favoritesRow = new LinearLayout(this);
         favoritesRow.setOrientation(LinearLayout.HORIZONTAL);
+        favoritesRow.setGravity(Gravity.CENTER_VERTICAL);
         content.addView(favoritesRow);
         appGrid = new LinearLayout(this);
         appGrid.setOrientation(LinearLayout.VERTICAL);
@@ -163,7 +166,7 @@ public class MainActivity extends Activity {
         root.addView(drawerScrim, new FrameLayout.LayoutParams(-1, -1));
         settingsDrawer = new LinearLayout(this);
         settingsDrawer.setOrientation(LinearLayout.VERTICAL);
-        settingsDrawer.setBackground(roundRect(Color.rgb(25, 30, 40), dp(26)));
+        settingsDrawer.setBackground(roundRect(Color.rgb(18, 27, 39), dp(26)));
         settingsDrawer.setTranslationX(dp(430));
         root.addView(settingsDrawer, new FrameLayout.LayoutParams(dp(410), -1, Gravity.END));
         setContentView(root);
@@ -204,17 +207,49 @@ public class MainActivity extends Activity {
                     17, Color.LTGRAY, false));
             return;
         }
+
+        List<List<View>> rows = new ArrayList<>();
         for (int start = 0; start < filtered.size(); start += columns) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
             rp.bottomMargin = dp(12);
             appGrid.addView(row, rp);
+            List<View> rowViews = new ArrayList<>();
             for (int i = start; i < Math.min(start + columns, filtered.size()); i++) {
                 ResolveInfo app = filtered.get(i);
                 LinearLayout.LayoutParams tileParams = new LinearLayout.LayoutParams(0, dp(136), 1);
                 tileParams.setMargins(dp(5), dp(4), dp(5), dp(4));
-                row.addView(makeTile(app, pm, false), tileParams);
+                View tile = makeTile(app, pm, false);
+                row.addView(tile, tileParams);
+                rowViews.add(tile);
+            }
+            rows.add(rowViews);
+        }
+        attachDpadGrid(rows);
+    }
+
+    private void attachDpadGrid(List<List<View>> rows) {
+        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+            List<View> rowViews = rows.get(rowIndex);
+            for (int columnIndex = 0; columnIndex < rowViews.size(); columnIndex++) {
+                View current = rowViews.get(columnIndex);
+                if (columnIndex > 0) {
+                    current.setNextFocusLeftId(rowViews.get(columnIndex - 1).getId());
+                }
+                if (columnIndex < rowViews.size() - 1) {
+                    current.setNextFocusRightId(rowViews.get(columnIndex + 1).getId());
+                }
+                if (rowIndex > 0) {
+                    List<View> previous = rows.get(rowIndex - 1);
+                    int previousColumn = Math.min(columnIndex, previous.size() - 1);
+                    current.setNextFocusUpId(previous.get(previousColumn).getId());
+                }
+                if (rowIndex < rows.size() - 1) {
+                    List<View> next = rows.get(rowIndex + 1);
+                    int nextColumn = Math.min(columnIndex, next.size() - 1);
+                    current.setNextFocusDownId(next.get(nextColumn).getId());
+                }
             }
         }
     }
@@ -241,9 +276,15 @@ public class MainActivity extends Activity {
         tile.setOrientation(LinearLayout.VERTICAL);
         tile.setGravity(Gravity.CENTER);
         tile.setPadding(dp(8), dp(8), dp(8), dp(8));
-        tile.setBackground(appTileBackground(false));
         tile.setFocusable(true);
-        tile.setOnFocusChangeListener((v, focused) -> v.setBackground(appTileBackground(focused)));
+        tile.setId(View.generateViewId());
+        tile.setOnFocusChangeListener((v, focused) -> {
+            v.animate().scaleX(focused ? 1.08f : 1f).scaleY(focused ? 1.08f : 1f)
+                    .setDuration(120).start();
+            v.setElevation(focused ? dp(12) : dp(1));
+            v.setBackground(appTileBackground(focused));
+        });
+        tile.setBackground(appTileBackground(false));
         FrameLayout iconFrame = new FrameLayout(this);
         int size = dp(compact ? 48 : 56);
         ImageView icon = new ImageView(this);
@@ -289,14 +330,14 @@ public class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{top, bottom});
         d.setCornerRadius(dp(20));
-        d.setStroke(dp(focused ? 2 : 1), focused ? accent() : Color.rgb(55, 64, 81));
+        d.setStroke(dp(focused ? 3 : 1), focused ? accent() : Color.rgb(55, 64, 81));
         return d;
     }
 
     private int surfaceColor() {
         switch (theme()) {
             case "neon": return Color.rgb(27, 21, 47);
-            case "ocean": return Color.rgb(20, 42, 59);
+            case "ocean": return Color.rgb(18, 32, 52);
             case "sunset": return Color.rgb(57, 34, 43);
             case "forest": return Color.rgb(27, 48, 39);
             case "glossy": return Color.rgb(35, 44, 61);
@@ -307,14 +348,14 @@ public class MainActivity extends Activity {
     private int focusSurfaceColor() {
         switch (theme()) {
             case "neon": return Color.rgb(76, 43, 112);
-            case "ocean": return Color.rgb(32, 82, 105);
+            case "ocean": return Color.rgb(29, 73, 115);
             case "sunset": return Color.rgb(112, 59, 66);
             case "forest": return Color.rgb(47, 91, 67);
             default: return Color.rgb(47, 56, 73);
         }
     }
 
-    private String theme() { return prefs().getString("launcher_theme", "default"); }
+    private String theme() { return prefs().getString("launcher_theme", "ocean"); }
 
     private void toggleFavorite(String packageName) {
         java.util.Set<String> current = new java.util.HashSet<>(prefs().getStringSet(
@@ -398,6 +439,7 @@ public class MainActivity extends Activity {
                 card.setGravity(Gravity.CENTER);
                 card.setPadding(dp(7), dp(7), dp(7), dp(7));
                 card.setFocusable(true);
+                card.setId(View.generateViewId());
                 card.setBackground(choiceCardBackground(selected, false));
                 LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(0, dp(88), 1);
                 cardParams.setMargins(dp(4), dp(3), dp(4), dp(3));
