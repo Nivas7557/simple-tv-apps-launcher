@@ -15,10 +15,10 @@
 
     <application
         android:allowBackup="true"
-        android:label="Apps Home"
+        android:label="Shree TV Home"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity
-            android:name=".MainActivity"
+            android:name="com.shreenivas.tvhome.MainActivity"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize"
             android:exported="true">
             <intent-filter>
