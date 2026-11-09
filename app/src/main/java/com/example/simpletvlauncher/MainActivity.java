@@ -141,7 +141,7 @@ public class MainActivity extends Activity {
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(28), dp(34), dp(28), dp(28));
         panel.setBackground(roundRect(Color.rgb(25, 30, 40), dp(28)));
-n        TextView title = text("Quick settings", 26, Color.WHITE, true);
+        TextView title = text("Quick settings", 26, Color.WHITE, true);
         panel.addView(title);
         TextView note = text("Shortcuts to your device settings", 14, Color.rgb(166, 175, 191), false);
         LinearLayout.LayoutParams noteParams = new LinearLayout.LayoutParams(-1, -2);
