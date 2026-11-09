@@ -443,7 +443,12 @@ public class MainActivity extends Activity {
         }
         launchSettings(Settings.ACTION_WIFI_SETTINGS);
     }
-
+    private void launchSettings(String action) {
+        try {
+            startActivity(new Intent(action));
+        } catch (ActivityNotFoundException | SecurityException e) {
+        Toast.makeText(this, "Not available on this device", Toast.LENGTH_SHORT).show();
+    }
     private void addLabel(LinearLayout panel, String label) {
         TextView t = text(label.toUpperCase(Locale.ROOT), 11, accent(), true);
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
