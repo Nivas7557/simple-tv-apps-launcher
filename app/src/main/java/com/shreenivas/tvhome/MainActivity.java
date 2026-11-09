@@ -435,27 +435,32 @@ public class MainActivity extends Activity {
     }
 
     private void openInternetPanel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
-                startActivity(new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY));
-                return;
-            } catch (ActivityNotFoundException | SecurityException ignored) { }
-        }
-        launchSettings(Settings.ACTION_WIFI_SETTINGS);
-    }
-    private void launchSettings(String action) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         try {
-            startActivity(new Intent(action));
-        } catch (ActivityNotFoundException | SecurityException e) {
+            startActivity(new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY));
+            return;
+        } catch (ActivityNotFoundException | SecurityException ignored) {
+            // Fall back to Wi-Fi settings below.
+        }
+    }
+    launchSettings(Settings.ACTION_WIFI_SETTINGS);
+}
+
+private void launchSettings(String action) {
+    try {
+        startActivity(new Intent(action));
+    } catch (ActivityNotFoundException | SecurityException e) {
         Toast.makeText(this, "Not available on this device", Toast.LENGTH_SHORT).show();
     }
-    private void addLabel(LinearLayout panel, String label) {
-        TextView t = text(label.toUpperCase(Locale.ROOT), 11, accent(), true);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-        p.topMargin = dp(10);
-        p.bottomMargin = dp(4);
-        panel.addView(t, p);
-    }
+}
+
+private void addLabel(LinearLayout panel, String label) {
+    TextView t = text(label.toUpperCase(Locale.ROOT), 11, accent(), true);
+    LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+    p.topMargin = dp(10);
+    p.bottomMargin = dp(4);
+    panel.addView(t, p);
+}
 
     private void addColor(LinearLayout panel, String label, int color) {
         Button b = pill("●   " + label, false);
