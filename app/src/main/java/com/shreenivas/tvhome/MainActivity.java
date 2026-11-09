@@ -33,10 +33,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int WALLPAPER_REQUEST = 41;
@@ -48,13 +52,19 @@ public class MainActivity extends Activity {
     private static final String PREF_WALLPAPER = "wallpaper_uri";
     private static final String PREF_FAVORITES = "favorites";
     private static final String PREF_USER_NAME = "launcher_user_name";
-
+    private final ExecutorService appLoader = Executors.newSingleThreadExecutor();
+    private final List<ResolveInfo> appCache = new ArrayList<>();
+    private final List<View> drawerFocusables = new ArrayList<>();
     private FrameLayout root;
     private LinearLayout appGrid;
     private LinearLayout favoritesRow;
     private LinearLayout settingsDrawer;
+    private ScrollView drawerScroll;
     private View drawerScrim;
+    private View restoreFocus;
     private boolean drawerOpen;
+    private boolean scanInProgress;
+    private long lastAppScan;
     private String selectedCategory = "All";
 
     @Override protected void onCreate(Bundle state) {
@@ -62,11 +72,20 @@ public class MainActivity extends Activity {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
         buildScreen();
+        refreshAppsAsync();
     }
 
     @Override protected void onResume() {
         super.onResume();
-        if (appGrid != null) populateApps();
+        // Avoid rescanning every installed app when returning from an app/settings screen.
+        if (appGrid != null && !scanInProgress && System.currentTimeMillis() - lastAppScan > 120000) {
+            refreshAppsAsync();
+        }
+    }
+
+    @Override protected void onDestroy() {
+        appLoader.shutdownNow();
+        super.onDestroy();
     }
 
     @Override public void onBackPressed() {
@@ -88,9 +107,7 @@ public class MainActivity extends Activity {
             View shade = new View(this);
             shade.setBackgroundColor(0xB80D1017);
             root.addView(shade, new FrameLayout.LayoutParams(-1, -1));
-        } else {
-            root.setBackgroundColor(Color.rgb(9, 16, 25));
-        }
+        } else root.setBackgroundColor(Color.rgb(9, 16, 25));
 
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
@@ -100,13 +117,13 @@ public class MainActivity extends Activity {
         LinearLayout top = new LinearLayout(this);
         top.setGravity(Gravity.CENTER_VERTICAL);
         top.setBackground(roundRect(Color.argb(80, 9, 18, 33), dp(26)));
-        top.setPadding(dp(18), dp(12), dp(18), dp(12));
+        top.setPadding(dp(18), dp(8), dp(18), dp(8));
         TextView brand = text(userName(), 16, accent(), true);
         brand.setLetterSpacing(.15f);
         top.addView(brand);
         Button apps = pill("Apps", true);
         LinearLayout.LayoutParams appsParams = new LinearLayout.LayoutParams(-2, dp(46));
-        appsParams.leftMargin = dp(30);
+        appsParams.leftMargin = dp(24);
         top.addView(apps, appsParams);
         apps.setFocusable(false);
         View gap = new View(this);
@@ -114,39 +131,49 @@ public class MainActivity extends Activity {
         top.addView(text(new SimpleDateFormat("EEE, h:mm a", Locale.getDefault()).format(new Date()),
                 15, Color.WHITE, false));
         Button customize = pill("✦  Customize", false);
-        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(46));
-        cp.leftMargin = dp(14);
+        LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(-2, dp(44));
+        cp.leftMargin = dp(12);
         top.addView(customize, cp);
         customize.setOnClickListener(v -> openDrawer(true));
         Button quick = pill("⚙  Quick settings", false);
-        LinearLayout.LayoutParams qp = new LinearLayout.LayoutParams(-2, dp(46));
-        qp.leftMargin = dp(9);
+        LinearLayout.LayoutParams qp = new LinearLayout.LayoutParams(-2, dp(44));
+        qp.leftMargin = dp(8);
         top.addView(quick, qp);
         quick.setOnClickListener(v -> openDrawer(false));
         page.addView(top);
 
         TextView heading = text("Your apps", 32, Color.WHITE, true);
         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(-1, -2);
-        hp.topMargin = dp(30);
+        hp.topMargin = dp(24);
         page.addView(heading, hp);
 
         LinearLayout categoryBar = new LinearLayout(this);
         categoryBar.setGravity(Gravity.CENTER_VERTICAL);
         String[] categories = {"All", "Favorites", "Media", "Games", "Other"};
+        List<Button> tabs = new ArrayList<>();
         for (String category : categories) {
             Button tab = pill(category, category.equals(selectedCategory));
+            tab.setId(View.generateViewId());
+            tabs.add(tab);
             LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, dp(42));
             tp.rightMargin = dp(8);
             categoryBar.addView(tab, tp);
-            tab.setOnClickListener(v -> { selectedCategory = category; populateApps(); });
+            tab.setOnClickListener(v -> {
+                selectedCategory = category;
+                for (int i = 0; i < tabs.size(); i++) tabs.get(i).setBackground(
+                        roundRect(categories[i].equals(selectedCategory) ? accent() : surfaceColor(), dp(22)));
+                renderApps();
+            });
         }
+        linkHorizontal(tabs);
         LinearLayout.LayoutParams cbp = new LinearLayout.LayoutParams(-1, -2);
-        cbp.topMargin = dp(14);
-        cbp.bottomMargin = dp(12);
+        cbp.topMargin = dp(12);
+        cbp.bottomMargin = dp(10);
         page.addView(categoryBar, cbp);
 
         ScrollView scroll = new ScrollView(this);
         scroll.setClipToPadding(false);
+        scroll.setFillViewport(false);
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         favoritesRow = new LinearLayout(this);
@@ -166,36 +193,58 @@ public class MainActivity extends Activity {
         root.addView(drawerScrim, new FrameLayout.LayoutParams(-1, -1));
         settingsDrawer = new LinearLayout(this);
         settingsDrawer.setOrientation(LinearLayout.VERTICAL);
-        settingsDrawer.setBackground(roundRect(Color.rgb(18, 27, 39), dp(26)));
+        settingsDrawer.setBackground(roundRect(Color.rgb(14, 27, 43), dp(26)));
+        settingsDrawer.setElevation(dp(20));
         settingsDrawer.setTranslationX(dp(430));
         root.addView(settingsDrawer, new FrameLayout.LayoutParams(dp(410), -1, Gravity.END));
         setContentView(root);
-        populateApps();
+        renderApps();
     }
 
-    private void populateApps() {
+    private void refreshAppsAsync() {
+        if (scanInProgress) return;
+        scanInProgress = true;
+        appLoader.execute(() -> {
+            PackageManager pm = getPackageManager();
+            Map<String, ResolveInfo> unique = new LinkedHashMap<>();
+            addApps(pm, Intent.CATEGORY_LEANBACK_LAUNCHER, unique);
+            addApps(pm, Intent.CATEGORY_LAUNCHER, unique);
+            List<ResolveInfo> result = new ArrayList<>(unique.values());
+            Collections.sort(result, Comparator.comparing(x -> x.loadLabel(pm).toString().toLowerCase(Locale.ROOT)));
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                appCache.clear();
+                appCache.addAll(result);
+                scanInProgress = false;
+                lastAppScan = System.currentTimeMillis();
+                renderApps();
+            });
+        });
+    }
+
+    private void renderApps() {
         if (appGrid == null || favoritesRow == null) return;
         appGrid.removeAllViews();
         favoritesRow.removeAllViews();
         PackageManager pm = getPackageManager();
-        Map<String, ResolveInfo> unique = new LinkedHashMap<>();
-        addApps(pm, Intent.CATEGORY_LEANBACK_LAUNCHER, unique);
-        addApps(pm, Intent.CATEGORY_LAUNCHER, unique);
-        List<ResolveInfo> all = new ArrayList<>(unique.values());
-        Collections.sort(all, Comparator.comparing(x -> x.loadLabel(pm).toString().toLowerCase(Locale.ROOT)));
         List<String> favorites = new ArrayList<>(prefs().getStringSet(PREF_FAVORITES,
                 Collections.<String>emptySet()));
         List<ResolveInfo> favoriteApps = new ArrayList<>();
         List<ResolveInfo> filtered = new ArrayList<>();
-        for (ResolveInfo app : all) {
+        for (ResolveInfo app : appCache) {
             String pkg = app.activityInfo.packageName;
             if (favorites.contains(pkg)) favoriteApps.add(app);
             if (matchesCategory(app, selectedCategory, favorites)) filtered.add(app);
         }
+        if (appCache.isEmpty()) {
+            appGrid.addView(text(scanInProgress ? "Loading apps…" : "No apps found.", 17,
+                    Color.LTGRAY, false));
+            return;
+        }
         if (!"Favorites".equals(selectedCategory) && !favoriteApps.isEmpty()) {
             TextView label = text("FAVORITES", 13, accent(), true);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-            lp.bottomMargin = dp(8);
+            lp.bottomMargin = dp(7);
             favoritesRow.addView(label, lp);
             for (ResolveInfo app : favoriteApps) {
                 favoritesRow.addView(makeTile(app, pm, true), new LinearLayout.LayoutParams(dp(142), dp(132)));
@@ -207,20 +256,18 @@ public class MainActivity extends Activity {
                     17, Color.LTGRAY, false));
             return;
         }
-
         List<List<View>> rows = new ArrayList<>();
         for (int start = 0; start < filtered.size(); start += columns) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
-            rp.bottomMargin = dp(12);
+            rp.bottomMargin = dp(10);
             appGrid.addView(row, rp);
             List<View> rowViews = new ArrayList<>();
             for (int i = start; i < Math.min(start + columns, filtered.size()); i++) {
-                ResolveInfo app = filtered.get(i);
                 LinearLayout.LayoutParams tileParams = new LinearLayout.LayoutParams(0, dp(136), 1);
                 tileParams.setMargins(dp(5), dp(4), dp(5), dp(4));
-                View tile = makeTile(app, pm, false);
+                View tile = makeTile(filtered.get(i), pm, false);
                 row.addView(tile, tileParams);
                 rowViews.add(tile);
             }
@@ -230,27 +277,24 @@ public class MainActivity extends Activity {
     }
 
     private void attachDpadGrid(List<List<View>> rows) {
-        for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
-            List<View> rowViews = rows.get(rowIndex);
-            for (int columnIndex = 0; columnIndex < rowViews.size(); columnIndex++) {
-                View current = rowViews.get(columnIndex);
-                if (columnIndex > 0) {
-                    current.setNextFocusLeftId(rowViews.get(columnIndex - 1).getId());
-                }
-                if (columnIndex < rowViews.size() - 1) {
-                    current.setNextFocusRightId(rowViews.get(columnIndex + 1).getId());
-                }
-                if (rowIndex > 0) {
-                    List<View> previous = rows.get(rowIndex - 1);
-                    int previousColumn = Math.min(columnIndex, previous.size() - 1);
-                    current.setNextFocusUpId(previous.get(previousColumn).getId());
-                }
-                if (rowIndex < rows.size() - 1) {
-                    List<View> next = rows.get(rowIndex + 1);
-                    int nextColumn = Math.min(columnIndex, next.size() - 1);
-                    current.setNextFocusDownId(next.get(nextColumn).getId());
-                }
+        for (int r = 0; r < rows.size(); r++) {
+            List<View> row = rows.get(r);
+            for (int c = 0; c < row.size(); c++) {
+                View current = row.get(c);
+                if (c > 0) current.setNextFocusLeftId(row.get(c - 1).getId());
+                if (c + 1 < row.size()) current.setNextFocusRightId(row.get(c + 1).getId());
+                if (r > 0) current.setNextFocusUpId(rows.get(r - 1).get(
+                        Math.min(c, rows.get(r - 1).size() - 1)).getId());
+                if (r + 1 < rows.size()) current.setNextFocusDownId(rows.get(r + 1).get(
+                        Math.min(c, rows.get(r + 1).size() - 1)).getId());
             }
+        }
+    }
+
+    private void linkHorizontal(List<? extends View> views) {
+        for (int i = 0; i < views.size(); i++) {
+            if (i > 0) views.get(i).setNextFocusLeftId(views.get(i - 1).getId());
+            if (i + 1 < views.size()) views.get(i).setNextFocusRightId(views.get(i + 1).getId());
         }
     }
 
@@ -278,13 +322,14 @@ public class MainActivity extends Activity {
         tile.setPadding(dp(8), dp(8), dp(8), dp(8));
         tile.setFocusable(true);
         tile.setId(View.generateViewId());
+        tile.setBackground(appTileBackground(false));
         tile.setOnFocusChangeListener((v, focused) -> {
-            v.animate().scaleX(focused ? 1.08f : 1f).scaleY(focused ? 1.08f : 1f)
-                    .setDuration(120).start();
-            v.setElevation(focused ? dp(12) : dp(1));
+            v.animate().cancel();
+            v.animate().scaleX(focused ? 1.06f : 1f).scaleY(focused ? 1.06f : 1f)
+                    .setDuration(90).setInterpolator(new DecelerateInterpolator()).start();
+            v.setElevation(focused ? dp(10) : dp(1));
             v.setBackground(appTileBackground(focused));
         });
-        tile.setBackground(appTileBackground(false));
         FrameLayout iconFrame = new FrameLayout(this);
         int size = dp(compact ? 48 : 56);
         ImageView icon = new ImageView(this);
@@ -308,8 +353,7 @@ public class MainActivity extends Activity {
             badgeBg.setColor(Color.rgb(35, 40, 52));
             badgeBg.setShape(GradientDrawable.OVAL);
             badgeView.setBackground(badgeBg);
-            iconFrame.addView(badgeView,
-                    new FrameLayout.LayoutParams(dp(23), dp(23), Gravity.END | Gravity.BOTTOM));
+            iconFrame.addView(badgeView, new FrameLayout.LayoutParams(dp(23), dp(23), Gravity.END | Gravity.BOTTOM));
         }
         tile.addView(iconFrame, new LinearLayout.LayoutParams(size, size));
         TextView name = text(info.loadLabel(pm).toString(), compact ? 12 : 14, Color.WHITE, true);
@@ -325,12 +369,10 @@ public class MainActivity extends Activity {
 
     private GradientDrawable appTileBackground(boolean focused) {
         int top = focused ? focusSurfaceColor() : surfaceColor();
-        int bottom = theme().equals("glossy")
-                ? (focused ? Color.rgb(63, 77, 103) : Color.rgb(21, 27, 39)) : top;
         GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{top, bottom});
+                new int[]{top, theme().equals("glossy") ? Color.rgb(21, 27, 39) : top});
         d.setCornerRadius(dp(20));
-        d.setStroke(dp(focused ? 3 : 1), focused ? accent() : Color.rgb(55, 64, 81));
+        d.setStroke(dp(focused ? 3 : 1), focused ? accent() : Color.rgb(55, 74, 91));
         return d;
     }
 
@@ -358,49 +400,87 @@ public class MainActivity extends Activity {
     private String theme() { return prefs().getString("launcher_theme", "ocean"); }
 
     private void toggleFavorite(String packageName) {
-        java.util.Set<String> current = new java.util.HashSet<>(prefs().getStringSet(
-                PREF_FAVORITES, Collections.<String>emptySet()));
+        Set<String> current = new HashSet<>(prefs().getStringSet(PREF_FAVORITES, Collections.<String>emptySet()));
         if (!current.add(packageName)) current.remove(packageName);
         prefs().edit().putStringSet(PREF_FAVORITES, current).apply();
         Toast.makeText(this, current.contains(packageName) ? "Added to Favorites" : "Removed from Favorites",
                 Toast.LENGTH_SHORT).show();
-        populateApps();
+        renderApps();
     }
 
     private void addApps(PackageManager pm, String category, Map<String, ResolveInfo> out) {
         Intent query = new Intent(Intent.ACTION_MAIN);
         query.addCategory(category);
-        for (ResolveInfo app : pm.queryIntentActivities(query, 0)) {
+        for (ResolveInfo app : pm.queryIntentActivities(query, 0))
             out.put(app.activityInfo.packageName + "/" + app.activityInfo.name, app);
-        }
     }
 
     private void openDrawer(boolean customize) {
         if (drawerOpen) return;
         drawerOpen = true;
+        restoreFocus = getCurrentFocus();
+        drawerFocusables.clear();
         drawerScrim.setVisibility(View.VISIBLE);
         settingsDrawer.removeAllViews();
-        settingsDrawer.setPadding(dp(24), dp(26), dp(24), dp(22));
-        ScrollView panelScroll = new ScrollView(this);
-        panelScroll.setClipToPadding(false);
+        settingsDrawer.setPadding(dp(22), dp(22), dp(22), dp(18));
+        drawerScroll = new ScrollView(this);
+        drawerScroll.setClipToPadding(false);
+        drawerScroll.setFillViewport(true);
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        settingsDrawer.addView(panelScroll, new LinearLayout.LayoutParams(-1, 0, 1));
-        panelScroll.addView(panel);
+        drawerScroll.addView(panel);
+        settingsDrawer.addView(drawerScroll, new LinearLayout.LayoutParams(-1, 0, 1));
         if (customize) buildCustomizePanel(panel); else buildQuickPanel(panel);
-        Button close = pill("Close", false);
-        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(-1, dp(44));
-        closeParams.topMargin = dp(8);
+        Button close = drawerButton("Close  ·  Back", false);
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(-1, dp(46));
+        closeParams.topMargin = dp(10);
         settingsDrawer.addView(close, closeParams);
+        drawerFocusables.add(close);
         close.setOnClickListener(v -> closeDrawer());
-        settingsDrawer.animate().translationX(0).setDuration(220)
+        close.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() == android.view.KeyEvent.ACTION_DOWN
+                    && keyCode == android.view.KeyEvent.KEYCODE_DPAD_LEFT) {
+                closeDrawer(); return true;
+            }
+            return false;
+        });
+        linkDrawerFocus();
+        settingsDrawer.animate().cancel();
+        settingsDrawer.animate().translationX(0).setDuration(140)
                 .setInterpolator(new DecelerateInterpolator()).start();
+        drawerScrim.setOnKeyListener((v, keyCode, event) -> {
+            if (event.getAction() == android.view.KeyEvent.ACTION_DOWN
+                    && keyCode == android.view.KeyEvent.KEYCODE_BACK) { closeDrawer(); return true; }
+            return false;
+        });
+        if (!drawerFocusables.isEmpty()) drawerFocusables.get(0).post(() -> {
+            if (drawerOpen && !drawerFocusables.isEmpty()) drawerFocusables.get(0).requestFocus();
+        });
+    }
+
+    private void linkDrawerFocus() {
+        // Quick menu is a two-column grid: left/right within a pair, up/down to the same column.
+        for (int i = 0; i < drawerFocusables.size(); i++) {
+            View v = drawerFocusables.get(i);
+            if (i % 2 == 0 && i + 1 < drawerFocusables.size() - 1)
+                v.setNextFocusRightId(drawerFocusables.get(i + 1).getId());
+            if (i % 2 == 1) v.setNextFocusLeftId(drawerFocusables.get(i - 1).getId());
+            int up = i - 2, down = i + 2;
+            if (up >= 0) v.setNextFocusUpId(drawerFocusables.get(up).getId());
+            else v.setNextFocusUpId(v.getId());
+            if (down < drawerFocusables.size() - 1) v.setNextFocusDownId(drawerFocusables.get(down).getId());
+            else if (i < drawerFocusables.size() - 1) v.setNextFocusDownId(drawerFocusables.get(drawerFocusables.size() - 1).getId());
+        }
+        if (drawerFocusables.size() >= 2) {
+            View close = drawerFocusables.get(drawerFocusables.size() - 1);
+            close.setNextFocusUpId(drawerFocusables.get(drawerFocusables.size() - 2).getId());
+        }
     }
 
     private void buildCustomizePanel(LinearLayout panel) {
         panel.addView(text("Customize Home Launcher", 24, Color.WHITE, true));
         addLabel(panel, "User name");
-        Button name = pill("✎  " + userName(), false);
+        Button name = drawerButton("✎  " + userName(), false);
         addDrawerButton(panel, name);
         name.setOnClickListener(v -> showUserNameDialog());
         addLabel(panel, "Accent");
@@ -419,49 +499,136 @@ public class MainActivity extends Activity {
         addChoiceGrid(panel, new String[]{"Default", "Neon", "Ocean", "Sunset", "Forest", "Glossy"},
                 new String[]{"default", "neon", "ocean", "sunset", "forest", "glossy"}, "theme");
         addLabel(panel, "Wallpaper");
-        Button wallpaper = pill("Choose wallpaper…", false);
+        Button wallpaper = drawerButton("Choose wallpaper…", false);
         addDrawerButton(panel, wallpaper);
         wallpaper.setOnClickListener(v -> chooseWallpaper());
     }
 
+    private void buildQuickPanel(LinearLayout panel) {
+        panel.addView(text("Quick settings", 25, Color.WHITE, true));
+        panel.addView(text("Device controls and system shortcuts", 13, Color.LTGRAY, false));
+        addLabel(panel, "Connectivity");
+        addQuickPair(panel, "◉  Internet & Wi-Fi", this::openInternetPanel,
+                "⌁  Wi-Fi settings", () -> launchSettings(Settings.ACTION_WIFI_SETTINGS));
+        addLabel(panel, "Device");
+        addQuickPair(panel, "◈  Bluetooth", () -> launchSettings(Settings.ACTION_BLUETOOTH_SETTINGS),
+                "▣  Display", () -> launchSettings(Settings.ACTION_DISPLAY_SETTINGS));
+        addLabel(panel, "Sound & system");
+        addQuickPair(panel, "♫  Sound", () -> launchSettings(Settings.ACTION_SOUND_SETTINGS),
+                "⚙  All settings", () -> launchSettings(Settings.ACTION_SETTINGS));
+    }
+
+    private void addQuickPair(LinearLayout panel, String firstLabel, Runnable firstAction,
+                              String secondLabel, Runnable secondAction) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        Button first = drawerButton(firstLabel, false);
+        Button second = drawerButton(secondLabel, false);
+        LinearLayout.LayoutParams firstParams = new LinearLayout.LayoutParams(0, dp(64), 1);
+        firstParams.rightMargin = dp(7);
+        LinearLayout.LayoutParams secondParams = new LinearLayout.LayoutParams(0, dp(64), 1);
+        secondParams.leftMargin = dp(7);
+        row.addView(first, firstParams);
+        row.addView(second, secondParams);
+        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(64));
+        rowParams.bottomMargin = dp(7);
+        panel.addView(row, rowParams);
+        drawerFocusables.add(first);
+        drawerFocusables.add(second);
+        first.setOnClickListener(v -> firstAction.run());
+        second.setOnClickListener(v -> secondAction.run());
+    }
+
+    private Button drawerButton(String label, boolean selected) {
+        Button b = pill(label, selected);
+        b.setId(View.generateViewId());
+        b.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        b.setPadding(dp(14), 0, dp(10), 0);
+        b.setMinHeight(dp(46));
+        b.setOnFocusChangeListener((v, focused) -> {
+            v.animate().cancel();
+            v.animate().scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f)
+                    .setDuration(85).start();
+            v.setElevation(focused ? dp(8) : dp(1));
+            v.setBackground(roundRect(focused ? focusSurfaceColor() : surfaceColor(), dp(15)));
+        });
+        return b;
+    }
+
+    private void openInternetPanel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try { startActivity(new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY)); return; }
+            catch (ActivityNotFoundException | SecurityException ignored) { }
+        }
+        launchSettings(Settings.ACTION_WIFI_SETTINGS);
+    }
+
+    private void launchSettings(String action) {
+        try { startActivity(new Intent(action)); }
+        catch (ActivityNotFoundException | SecurityException e) {
+            Toast.makeText(this, "Not available on this device", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void addLabel(LinearLayout panel, String label) {
+        TextView t = text(label.toUpperCase(Locale.ROOT), 12, accent(), true);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
+        p.topMargin = dp(12); p.bottomMargin = dp(5);
+        panel.addView(t, p);
+    }
+
+    private void addDrawerButton(LinearLayout panel, Button button) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(42));
+        p.bottomMargin = dp(4);
+        panel.addView(button, p);
+        drawerFocusables.add(button);
+    }
+
     private void addChoiceGrid(LinearLayout panel, String[] labels, String[] values, String type) {
+        List<List<View>> rows = new ArrayList<>();
         for (int start = 0; start < labels.length; start += 2) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, -2);
             rowParams.bottomMargin = dp(7);
             panel.addView(row, rowParams);
+            List<View> rowViews = new ArrayList<>();
             for (int index = start; index < Math.min(start + 2, labels.length); index++) {
                 String value = values[index];
-                boolean selected = isChoiceSelected(type, value);
                 LinearLayout card = new LinearLayout(this);
                 card.setOrientation(LinearLayout.VERTICAL);
                 card.setGravity(Gravity.CENTER);
                 card.setPadding(dp(7), dp(7), dp(7), dp(7));
                 card.setFocusable(true);
                 card.setId(View.generateViewId());
-                card.setBackground(choiceCardBackground(selected, false));
-                LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(0, dp(88), 1);
+                card.setBackground(choiceCardBackground(isChoiceSelected(type, value), false));
+                LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(0, dp(84), 1);
                 cardParams.setMargins(dp(4), dp(3), dp(4), dp(3));
                 row.addView(card, cardParams);
                 View sample = makeChoicePreview(type, value);
-                LinearLayout.LayoutParams sampleParams = new LinearLayout.LayoutParams(-1, dp(42));
-                sampleParams.bottomMargin = dp(5);
+                LinearLayout.LayoutParams sampleParams = new LinearLayout.LayoutParams(-1, dp(38));
+                sampleParams.bottomMargin = dp(4);
                 card.addView(sample, sampleParams);
-                TextView caption = text(labels[index], 12, Color.WHITE, selected);
+                TextView caption = text(labels[index], 12, Color.WHITE, isChoiceSelected(type, value));
                 caption.setGravity(Gravity.CENTER);
                 card.addView(caption, new LinearLayout.LayoutParams(-1, -2));
                 card.setOnFocusChangeListener((v, focused) -> {
-                    v.animate().scaleX(focused ? 1.04f : 1f).scaleY(focused ? 1.04f : 1f)
-                            .setDuration(120).start();
-                    v.setElevation(focused ? dp(12) : dp(1));
+                    v.animate().cancel();
+                    v.animate().scaleX(focused ? 1.035f : 1f).scaleY(focused ? 1.035f : 1f).setDuration(85).start();
+                    v.setElevation(focused ? dp(8) : dp(1));
                     v.setBackground(choiceCardBackground(isChoiceSelected(type, value), focused));
                 });
-                card.setOnClickListener(v -> {
-                    applyChoice(type, value);
-                    refreshAndReopenCustomize();
-                });
+                card.setOnClickListener(v -> { applyChoice(type, value); refreshAndReopenCustomize(); });
+                rowViews.add(card);
+                drawerFocusables.add(card);
             }
+            linkHorizontal(rowViews);
+            rows.add(rowViews);
+        }
+        for (int r = 0; r < rows.size(); r++) for (int c = 0; c < rows.get(r).size(); c++) {
+            View item = rows.get(r).get(c);
+            if (r > 0) item.setNextFocusUpId(rows.get(r - 1).get(Math.min(c, rows.get(r - 1).size() - 1)).getId());
+            if (r + 1 < rows.size()) item.setNextFocusDownId(rows.get(r + 1).get(Math.min(c, rows.get(r + 1).size() - 1)).getId());
         }
     }
 
@@ -470,7 +637,7 @@ public class MainActivity extends Activity {
         drawable.setColor(focused ? focusSurfaceColor() : (selected ? blend(surfaceColor(), accent()) : surfaceColor()));
         drawable.setCornerRadius(dp(14));
         drawable.setStroke(dp(focused ? 3 : (selected ? 2 : 1)),
-                focused || selected ? accent() : Color.rgb(55, 64, 81));
+                focused || selected ? accent() : Color.rgb(55, 74, 91));
         return drawable;
     }
 
@@ -482,10 +649,8 @@ public class MainActivity extends Activity {
 
     private View makeChoicePreview(String type, String value) {
         FrameLayout preview = new FrameLayout(this);
-        int color;
-        if ("accent".equals(type)) color = accentColor(value);
-        else if ("theme".equals(type)) color = themePreviewColor(value);
-        else color = accent();
+        int color = "accent".equals(type) ? accentColor(value)
+                : ("theme".equals(type) ? themePreviewColor(value) : accent());
         if ("columns".equals(type)) {
             TextView number = text(value, 22, Color.WHITE, true);
             number.setGravity(Gravity.CENTER);
@@ -493,24 +658,15 @@ public class MainActivity extends Activity {
             return preview;
         }
         View sample = new View(this);
-        GradientDrawable sampleBg;
-        if ("theme".equals(type) && "glossy".equals(value)) {
-            sampleBg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                    new int[]{Color.rgb(125, 165, 230), Color.rgb(34, 48, 76)});
-        } else {
-            sampleBg = new GradientDrawable();
-            sampleBg.setColor("badge".equals(type) && value.isEmpty() ? Color.rgb(75, 82, 96) : color);
-        }
-        if ("shape".equals(type) && "circle".equals(value)) sampleBg.setShape(GradientDrawable.OVAL);
-        else sampleBg.setCornerRadius("shape".equals(type) && "original".equals(value) ? dp(4) : dp(11));
-        sample.setBackground(sampleBg);
-        FrameLayout.LayoutParams sampleParams = new FrameLayout.LayoutParams(
-                "shape".equals(type) ? dp(36) : -1, dp(34), Gravity.CENTER);
-        if (!"shape".equals(type)) {
-            sampleParams.leftMargin = dp(12);
-            sampleParams.rightMargin = dp(12);
-        }
-        preview.addView(sample, sampleParams);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor("badge".equals(type) && value.isEmpty() ? Color.rgb(75, 82, 96) : color);
+        if ("shape".equals(type) && "circle".equals(value)) bg.setShape(GradientDrawable.OVAL);
+        else bg.setCornerRadius("shape".equals(type) && "original".equals(value) ? dp(4) : dp(11));
+        sample.setBackground(bg);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                "shape".equals(type) ? dp(36) : -1, dp(32), Gravity.CENTER);
+        if (!"shape".equals(type)) { params.leftMargin = dp(12); params.rightMargin = dp(12); }
+        preview.addView(sample, params);
         if ("badge".equals(type) && !value.isEmpty()) {
             TextView badge = text(value, 18, Color.WHITE, true);
             badge.setGravity(Gravity.CENTER);
@@ -585,170 +741,45 @@ public class MainActivity extends Activity {
                 }).show();
     }
 
-    private void buildQuickPanel(LinearLayout panel) {
-        panel.addView(text("Quick settings", 25, Color.WHITE, true));
-        addLabel(panel, "Wi-Fi");
-        addQuickPair(panel, "Wi-Fi toggle & networks", this::openInternetPanel,
-                "Wi-Fi settings", () -> launchSettings(Settings.ACTION_WIFI_SETTINGS));
-        addLabel(panel, "Device settings");
-        addQuickPair(panel, "Bluetooth settings", () -> launchSettings(Settings.ACTION_BLUETOOTH_SETTINGS),
-                "Display settings", () -> launchSettings(Settings.ACTION_DISPLAY_SETTINGS));
-        addQuickPair(panel, "Sound settings", () -> launchSettings(Settings.ACTION_SOUND_SETTINGS),
-                "All settings", () -> launchSettings(Settings.ACTION_SETTINGS));
-    }
-
-    private void addQuickPair(LinearLayout panel, String firstLabel, Runnable firstAction,
-                              String secondLabel, Runnable secondAction) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        Button first = pill(firstLabel, false);
-        Button second = pill(secondLabel, false);
-        LinearLayout.LayoutParams firstParams = new LinearLayout.LayoutParams(0, dp(58), 1);
-        firstParams.rightMargin = dp(6);
-        LinearLayout.LayoutParams secondParams = new LinearLayout.LayoutParams(0, dp(58), 1);
-        secondParams.leftMargin = dp(6);
-        row.addView(first, firstParams);
-        row.addView(second, secondParams);
-        LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(-1, dp(58));
-        rowParams.bottomMargin = dp(8);
-        panel.addView(row, rowParams);
-        first.setOnClickListener(v -> firstAction.run());
-        second.setOnClickListener(v -> secondAction.run());
-    }
-
-    private void openInternetPanel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
-                startActivity(new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY));
-                return;
-            } catch (ActivityNotFoundException | SecurityException ignored) { }
-        }
-        launchSettings(Settings.ACTION_WIFI_SETTINGS);
-    }
-
-    private void launchSettings(String action) {
-        try {
-            startActivity(new Intent(action));
-        } catch (ActivityNotFoundException | SecurityException e) {
-            Toast.makeText(this, "Not available on this device", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void addLabel(LinearLayout panel, String label) {
-        TextView t = text(label.toUpperCase(Locale.ROOT), 12, accent(), true);
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-        p.topMargin = dp(12);
-        p.bottomMargin = dp(5);
-        panel.addView(t, p);
-    }
-
-    private void addDrawerButton(LinearLayout panel, Button button) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(42));
-        p.bottomMargin = dp(4);
-        panel.addView(button, p);
-    }
-
     private void chooseWallpaper() {
         Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         pick.addCategory(Intent.CATEGORY_OPENABLE);
         pick.setType("image/*");
-        try {
-            startActivityForResult(pick, WALLPAPER_REQUEST);
-        } catch (ActivityNotFoundException e) {
-            Toast.makeText(this, "Image picker unavailable", Toast.LENGTH_SHORT).show();
-        }
+        try { startActivityForResult(pick, WALLPAPER_REQUEST); }
+        catch (ActivityNotFoundException e) { Toast.makeText(this, "Image picker unavailable", Toast.LENGTH_SHORT).show(); }
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode == WALLPAPER_REQUEST && resultCode == RESULT_OK
-                && data != null && data.getData() != null) {
+        if (requestCode == WALLPAPER_REQUEST && resultCode == RESULT_OK && data != null && data.getData() != null) {
             Uri uri = data.getData();
-            try {
-                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            } catch (SecurityException ignored) { }
-            showWallpaperPreview(uri);
-        }
-    }
-
-    private void showWallpaperPreview(Uri uri) {
-        android.app.Dialog dialog = new android.app.Dialog(this);
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dp(18), dp(14), dp(18), dp(14));
-        layout.setBackground(roundRect(Color.rgb(22, 27, 38), dp(20)));
-        TextView title = text("Wallpaper preview — drag to position", 19, Color.WHITE, true);
-        layout.addView(title, new LinearLayout.LayoutParams(-1, dp(38)));
-        FrameLayout viewport = new FrameLayout(this);
-        viewport.setClipToOutline(true);
-        viewport.setBackground(roundRect(Color.BLACK, dp(14)));
-        LinearLayout.LayoutParams viewportParams = new LinearLayout.LayoutParams(-1, 0, 1);
-        viewportParams.topMargin = dp(8);
-        viewportParams.bottomMargin = dp(12);
-        layout.addView(viewport, viewportParams);
-        ImageView preview = new ImageView(this);
-        preview.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        preview.setImageURI(uri);
-        viewport.addView(preview, new FrameLayout.LayoutParams(-1, -1));
-        final float[] lastTouch = new float[2];
-        preview.setOnTouchListener((view, event) -> {
-            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN) {
-                lastTouch[0] = event.getRawX();
-                lastTouch[1] = event.getRawY();
-                return true;
-            }
-            if (event.getAction() == android.view.MotionEvent.ACTION_MOVE) {
-                preview.setTranslationX(preview.getTranslationX() + event.getRawX() - lastTouch[0]);
-                preview.setTranslationY(preview.getTranslationY() + event.getRawY() - lastTouch[1]);
-                lastTouch[0] = event.getRawX();
-                lastTouch[1] = event.getRawY();
-                return true;
-            }
-            return event.getAction() == android.view.MotionEvent.ACTION_UP;
-        });
-        LinearLayout buttons = new LinearLayout(this);
-        Button cancel = pill("Cancel", false);
-        Button apply = pill("Apply wallpaper", true);
-        LinearLayout.LayoutParams cancelParams = new LinearLayout.LayoutParams(0, dp(48), 1);
-        cancelParams.rightMargin = dp(6);
-        buttons.addView(cancel, cancelParams);
-        LinearLayout.LayoutParams applyParams = new LinearLayout.LayoutParams(0, dp(48), 1);
-        applyParams.leftMargin = dp(6);
-        buttons.addView(apply, applyParams);
-        layout.addView(buttons, new LinearLayout.LayoutParams(-1, dp(48)));
-        dialog.setContentView(layout);
-        cancel.setOnClickListener(v -> dialog.dismiss());
-        apply.setOnClickListener(v -> {
+            try { getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); }
+            catch (SecurityException ignored) { }
             prefs().edit().putString(PREF_WALLPAPER, uri.toString()).apply();
-            dialog.dismiss();
-            drawerOpen = false;
             buildScreen();
-        });
-        dialog.show();
-        if (dialog.getWindow() != null) {
-            int width = Math.min(dp(820), getResources().getDisplayMetrics().widthPixels - dp(48));
-            int height = Math.min(dp(600), getResources().getDisplayMetrics().heightPixels - dp(48));
-            dialog.getWindow().setLayout(Math.max(dp(420), width), Math.max(dp(360), height));
+            renderApps();
         }
     }
 
     private void closeDrawer() {
         if (!drawerOpen) return;
         drawerOpen = false;
-        settingsDrawer.animate().translationX(dp(430)).setDuration(180)
+        settingsDrawer.animate().cancel();
+        settingsDrawer.animate().translationX(dp(430)).setDuration(110)
                 .setInterpolator(new DecelerateInterpolator())
-                .withEndAction(() -> drawerScrim.setVisibility(View.GONE)).start();
+                .withEndAction(() -> {
+                    drawerScrim.setVisibility(View.GONE);
+                    if (restoreFocus != null && restoreFocus.isShown()) restoreFocus.requestFocus();
+                    restoreFocus = null;
+                }).start();
     }
 
     private void launchApp(ResolveInfo app) {
         Intent launch = new Intent(Intent.ACTION_MAIN);
         launch.addCategory(Intent.CATEGORY_LAUNCHER);
         launch.setComponent(new ComponentName(app.activityInfo.packageName, app.activityInfo.name));
-        try {
-            startActivity(launch);
-        } catch (ActivityNotFoundException e) {
-            Toast.makeText(this, "Unable to open app", Toast.LENGTH_SHORT).show();
-        }
+        try { startActivity(launch); }
+        catch (ActivityNotFoundException e) { Toast.makeText(this, "Unable to open app", Toast.LENGTH_SHORT).show(); }
     }
 
     private Button pill(String label, boolean selected) {
@@ -779,11 +810,9 @@ public class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable();
         d.setColor(color);
         d.setCornerRadius(radius);
-        d.setStroke(dp(1), Color.rgb(55, 64, 81));
+        d.setStroke(dp(1), Color.rgb(55, 74, 91));
         return d;
     }
 
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 }
